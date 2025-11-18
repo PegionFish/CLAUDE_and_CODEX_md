@@ -1,149 +1,68 @@
-﻿# Repository Guidelines
+﻿# AGENTS 基线指引
 
-## Project Structure & Module Organization
-Gameplay engines, devices, and serialization code live under `src/`. Key folders: `engine/` (record/playback/prebake loops), `input/` & `output/` (hardware adapters), `io/` (JSON/MessagePack serializers), `common/` (timers, logging, shared utilities), `c_api/` (flat C surface for P/Invoke and other consumers), `replayer/` (CLI playback tooling), and `gui_wpf/` (WPF shell, MVVM view models, services, and interop). Runtime defaults live in `config/`, helpers in `scripts/`, external dependencies in `external/`, and NuGet artifacts under `packages/`. Tests span the native C API suite in `tests/c_api_tests.cpp` plus .NET/xUnit projects under `tests/Interop` and `tests/Services`. Keep new modules beside their peers and hook them up from the root `CMakeLists.txt` (and `src/gui_wpf/GameInputRecorder.csproj` when UI code is touched).
+## 文档目标
+- 该文件为 Codex/Claude 风格代理提供跨仓库共享的执行基线，可直接复制到任意项目。
+- 复制后仅需在文末 `### 项目特性` 增补仓库私有规则；若出现新的通用约束，再同步更新本基线。
 
-## Build, Test, and Development Commands
-- `pwsh scripts/build.ps1 -Configuration Debug -RunTests -BuildGui` is the recommended one-step dev loop: it configures CMake into `build/`, builds native libraries and `recorder_c_api.dll`, runs `ctest`, and builds the WPF GUI.
-- For manual control, `cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Debug` configures an out-of-source Windows build, then `cmake --build build --config Release --parallel` compiles the native libraries and `recorder_c_api` (with `BUILD_WPF_GUI=ON` it also invokes `dotnet build` for the WPF shell).
-- `ctest --test-dir build -C Release --output-on-failure` executes the C API GoogleTests (for example, the `c_api_tests` target wired up from `tests/CMakeLists.txt`; requires `-DBUILD_TESTS=ON`).
-- `dotnet test tests/Interop/InteropTests.csproj` and `dotnet test tests/Services/ServicesTests.csproj` run the managed interop and service-layer test suites (ensure `src/gui_wpf` and `recorder_c_api.dll` are built first).
-- `pwsh scripts/run_verification_tests.ps1` chains the high-level recording/replay smoke suite; run it before sharing binaries.
-- `pip install -r requirements.txt` installs optional Python analyzers used by helper scripts.
+## 核心交互原则
+- 保持批判性思维：遇到模糊或矛盾的输入先澄清，再执行；发现风险要立即提示并附至少一个备选方案。
+- 禁止自我删减：严格按用户指令办事，不得擅自跳过步骤；阅读被引用的文件必须自首行至末行保证完整性。
+- 结果需可验证：结论标注来源（文件路径或命令），尚未验证的工作以 TODO 形式记录后续动作与责任。
 
-## Coding Style & Naming Conventions
-Use 4-space indentation, braces on the same line, and keep headers self-contained. Classes and structs use `PascalCase`, public methods `camelCase`, and private data members end in `_`. Favor RAII for HANDLE/QPC lifetimes and emit diagnostics through `LOG_*` macros instead of raw I/O. In WPF or C# interop code, follow the `GameInputRecorder` namespace layout and keep filenames aligned with the contained class or view.
+## 环境与 Shell 约定
+- Windows 仓库优先使用 `pwsh`/`powershell`；仅在需要 POSIX 工具且不触及包管理时才用 WSL2。
+- 在 WSL2 中不要运行 `pnpm <script>` 或 Node 构建，相关命令需切回 Windows PowerShell 以避免 ABI 不一致。
+- 通过 `/mnt/<drive>/...` 访问文件会有跨盘开销，搜索时应限制目录或改用 Windows 原生命令。
+- 不自动安装依赖：提醒用户手动执行 `pnpm install`、`pip install` 等并确认完成。
+- 未经授权不得改动 `package.json`、锁文件或全局配置；如需新增依赖，先在 `/spec` 或 `/plan` 中提出方案。
+- PowerShell 下禁止直接调用 `sed/awk/head/tail` 等 Unix 工具，分别使用 `Select-Object -First`、`Get-Content -Tail`、`Out-Host -Paging`、`-replace` 等等价命令。
 
-## Testing Guidelines
-New C++ behavior in the engine, I/O, or C API should be covered by focused GoogleTests in the native suite (for example, by extending `tests/c_api_tests.cpp` or wiring a new `*_tests.cpp` from `tests/CMakeLists.txt`). Run `ctest` locally (preferably in Release) and attach representative recordings if your change touches timing heuristics or file formats. Managed interop and GUI behavior should be exercised through the xUnit projects in `tests/Interop` and `tests/Services` (run via `dotnet test`); keep tests fast, deterministic, and focused on public C API surfaces where possible. Add fixtures under `tests/fixtures/` when introducing serialization formats so replay regressions stay reproducible.
+## 工具与搜索优先级
+- 文件名检索使用 `fd`，内容检索使用 `rg` 并排除 `.git`、`node_modules`、`dist`、`coverage`、`out` 等目录。
+- 结构化/AST 查询优先 `sg` (ast-grep)，执行复杂模式前需在对话中说明命令及目标目录/语言，例如：
+  - `ast-grep -p "import $$ from 'node:path'" src --lang ts,tsx,mts,cts`
+  - `ast-grep -p "require('node:path')" src --lang js,cjs,mjs,ts,tsx`
+- 搜索遵循“先窄后宽”，先聚焦相关模块，找不到结果再逐步扩展范围。
 
-## Commit & Pull Request Guidelines
-Match the repo history: Chinese subject lines that lead with a scope plus a short summary (for example, `回放器: 修复自适应等待漂移` or `代码质量：消除全部MSVC编译警告`). Group one logical change per commit and document reproduction or perf numbers in the body. Pull requests should link issues, describe risk areas (devices, sampling rate, GUI), and note the results of `cmake --build`, `ctest`, `dotnet test`, and `scripts/run_verification_tests.ps1`. Attach screenshots or log snippets whenever GUI flows or timing metrics change.
+## 编辑与代码风格基线
+- 新建或修改文件默认采用 UTF-8（无 BOM/有 BOM 按原文件保持），如需引入其他编码必须事先说明理由。
+- 小范围修改优先使用 `apply_patch`；跨多文件或需要格式化的大改动可使用脚本，但要解释原因。
+- 代码保持 4 空格缩进、同行花括号（`if (...) {`）；类/结构体名称使用 `PascalCase`，公共方法 `camelCase`，私有成员可加 `_` 结尾。
+- 注释只描述意图、约束或难以直接看出的逻辑，避免“修改说明”类注释；删除过时代码时无需留纪念注释。
+- 资源管理采用 RAII 或托管封装，日志通过项目提供的宏/帮助器完成，禁止随意 `printf`/`Console.WriteLine` 泄露信息。
+- 不允许还原或覆盖用户已有改动，除非对方书面要求；严禁执行 `git reset --hard`、`git checkout -- <file>` 等破坏性命令。
 
-## Configuration & Security Tips
-Check `config/default_settings.json` and `config/logging.json` into source control, but keep OBS keys, proxy creds, and hardware identifiers in user overrides. When sharing recordings, scrub `system_info` blocks and validate MessagePack payloads with `src/common/file_format.h` before replaying on lab machines.
+## 构建 / 测试占位（复制到新仓库后补充）
+- `TODO: <项目构建命令>`
+- `TODO: <单元 / 集成测试命令>`
+- `TODO: <端到端 / 验证脚本>`
+- 在占位未填完前，需在对话中声明缺失信息并请求用户提供；补充后记得同步更新本区块。
 
-# AGENTS Guidelines
+## 工作流与计划工具
+- 任务若超出最简单 25%，必须用 `update_plan` 生成≥3步的计划，并在每步完成后更新状态；禁止单步计划。
+- 当用户启用 `/spec` → `/plan` → `/do` 流程时：
+  - `/spec`：仅可修改 `specs/` 下文档，用于沉淀需求与接受标准，禁止改源码。
+  - `/plan`：依据已批准的 spec，在 `plans/YYYY-MM-DD-title.md` 中写实施方案，并同步 `update_plan`；未获批准不得进入 `/do`。
+  - `/do`：严格按计划实现，必要时运行 `cmake`/`dotnet test`/脚本等验证；若需调整范围，先回 `/plan` 更新并获批。
+- 无论是否触发 stage-gated 流程，重要改动都要遵循“研究→计划→实现→验证”的闭环，缺少验证时必须说明风险。
 
-## Windows Environment Notice
+## 临时研究与文档
+- 临时调研、笔记或下载资料统一放入 `docs/research/`，文件命名为 `YYYY-MM-DD-topic.md`。
+- 任务完成后评估其价值：无用内容应删除（或提醒用户删除），有价值的内容迁移到正式文档或 spec/plan 中。
 
-- Prefer PowerShell (`pwsh`/`powershell`) when on Windows.
-- Prefer using pwsh.exe to run `pnpm <script>` when on WSL2.
-- WSL2 may be used for non-package-manager commands only (e.g., `rg`, `tar`). Avoid running Node builds in WSL due to OS mismatch.
-- WSL2 cross-drive performance: accessing repos under `/mnt/c|d|e/...` goes through a filesystem bridge and can be slower for full scans. Prefer scoping to subtrees, excluding heavy folders, or running the same searches with native Windows binaries in PowerShell for large/iterative scans.
-- Do not auto-run dependency installs. The user must run `pnpm install` in Windows PowerShell manually and then confirm completion.
-- Do not modify `package.json`/lockfiles to add or update dependencies without explicit user approval. Propose dependencies in `/spec` or `/plan`, and ask the user to run `pnpm add <pkg>` (or `pnpm install`) and confirm.
-- Do not call Unix text tools directly in PowerShell (e.g., `sed`, `awk`, `cut`, `head`, `tail`). Use PowerShell-native equivalents instead:
-  - `head` -> `Select-Object -First N`
-  - `tail` -> `Get-Content -Tail N`
-  - paging -> `Out-Host -Paging` or `more`
-  - substitution/replace -> `-replace` with `Get-Content`/`Set-Content`
+## 安全与审批
+- 在 `read-only` sandbox 中写文件需通过 `with_escalated_permissions` 申请；若命令被拒绝，要解释原因并尝试替代方案。
+- 运行可能修改系统状态、访问网络或写入受限目录的命令前，先在对话里说明目的并取得同意。
+- 默认拒绝任何恶意、破坏性或未授权的需求，必要时给出安全替代或参考资料。
 
-## Tool Priority
+## 项目特性占位
+> 新仓库复制本段后补充具体内容，不要改动以上基线。
 
-- Filename search: `fd`.
-- Text/content search: `rg` (ripgrep).
-- AST/structural search: `sg` (ast-grep) - preferred for code-aware queries (imports, call expressions, JSX/TSX nodes).
+### 项目特性
+- 主要技术栈：`TODO`
+- 自定义构建/发布注意事项：`TODO`
+- 额外安全/合规约束：`TODO`
+- 仓库特有流程：`TODO`
 
-### AST-grep Usage
-
-- Announce intent and show the exact command before running complex patterns.
-- Common queries:
-  - Find imports from `node:path` (TypeScript/TSX):
-    - `ast-grep -p "import $$ from 'node:path'" src --lang ts,tsx,mts,cts`
-  - Find CommonJS requires of `node:path`:
-    - `ast-grep -p "require('node:path')" src --lang js,cjs,mjs,ts,tsx`
-  - Suggest rewrite (do not auto-apply in code unless approved):
-    - Search: `ast-grep -p "import $$ from 'node:path'" src --lang ts,tsx`
-    - Proposed replacement: `import $$ from 'pathe'`
-
-### Search Hygiene (fd/rg/sg)
-
-- Exclude bulky folders to keep searches fast and relevant: `.git`, `node_modules`, `coverage`, `out`, `dist`.
-- Prefer running searches against a scoped path (e.g., `src`) to implicitly avoid vendor and VCS directories.
-- Examples:
-  - `rg -n "pattern" -g "!{.git,node_modules,coverage,out,dist}" src`
-  - `fd --hidden --exclude .git --exclude node_modules --exclude coverage --exclude out --exclude dist --type f ".tsx?$" src`
-- ast-grep typically respects `.gitignore`; target `src` to avoid scanning vendor folders:
-  - `ast-grep -p "import $$ from '@shared/$$'" src --lang ts,tsx,mts,cts`
-  - If needed, add ignore patterns to your ignore files rather than disabling ignores.
-
-## Temporary Research Files
-
-- Canonical location: store all temporary research artifacts (downloaded READMEs, API docs, scratch notes) under `docs/research/`.
-- Do not place temporary files at the repository root or outside `docs/research/`.
-- Commit policy: avoid committing temporary files unless they are necessary for traceability during `/spec` or `/plan`. If committed, keep the scope minimal and store them under `docs/` only.
-- Naming: use descriptive names with date or task context (e.g., `docs/research/2025-09-11-wsl-notes.md`).
-- Cleanup: after completing a task (`/do`), evaluate whether each temporary file is still required. Remove unneeded files, or promote essential content into curated docs under `docs/` or into `specs/`/`plans/`.
-
-## Stage-Gated Workflow (spec/plan/do)
-
-- Mode: Opt-in. The workflow applies only when the user explicitly uses `/spec`, `/plan`, or `/do`. Routine Q&A or trivial edits do not require these stages.
-- Triggers: A message containing one of `/spec`, `/plan`, or `/do` activates or advances the workflow. Once active, stages must proceed in order with explicit user approval to advance.
-- Guardrails:
-  - Do not modify source code before `/do`. Documentation/spec files may be edited only in `/spec`.
-  - Do not skip stages or proceed without user confirmation once the workflow is active.
-  - If scope changes, return to the appropriate prior stage for approval.
-  - Respect sandbox/approval settings for all actions.
-
-- When to Use
-  - Use the workflow for new features, structural refactors, multi-file changes, or work needing traceability.
-  - Skip the workflow (no triggers) for routine Q&A, diagnostics, or one-off trivial edits.
-
-- Entry Points and Prerequisites
-  - `/spec` is the canonical entry point for new efforts.
-  - `/plan` requires an approved `/spec`. If unclear which spec applies, pause and ask the user to identify the correct file(s) under `specs/`.
-  - `/do` requires an approved `/plan`.
-
-- `/spec` (Specifications; docs only)
-  - Purpose: Capture a concrete, reviewable specification using spec-kit style.
-  - Output: Markdown spec(s) under `specs/` (no code changes). Share a concise diff summary and links to updated files; wait for approval.
-  - Style: Specs are canonical and final. Do not include change logs or "correction/更正" notes. Incorporate revisions directly so the document always reflects the current agreed state. Historical context belongs in PR descriptions, commit messages, or the conversation - not in the spec.
-  - Recommended contents:
-    - Problem statement and context
-    - Goals and non-goals
-    - Requirements and constraints (functional, UX, performance, security)
-    - UX/flows and API/IPC contracts (as applicable)
-    - Acceptance criteria and success metrics
-    - Alternatives considered and open questions
-    - Rollout/backout considerations and telemetry (if relevant)
-
-- `/plan` (High-level Plan; docs only)
-  - Purpose: Turn the approved spec into an ordered, verifiable implementation plan.
-  - Inputs: Approved spec file(s) in `specs/`.
-  - Ambiguity: If the relevant spec is unclear, pause and request clarification before writing the plan.
-  - Style: Plans are canonical and should not include change logs or "correction/更正" notes. Incorporate revisions directly so the plan always reflects the current agreed state. Historical notes should live in PR descriptions, commit messages, or the conversation.
-  - Output:
-    - An ordered plan via `update_plan` (short, verifiable steps; Task is merged into Plan and tracked here).
-    - A plan document in `plans/` named `YYYY-MM-DD-short-title.md`, containing:
-      - Scope and links to authoritative spec(s)
-      - Assumptions and out-of-scope items
-      - Phases/milestones mapped to acceptance criteria
-      - Impacted areas, dependencies, risks/mitigations
-      - Validation strategy (tests/lint/build) and rollout/backout notes
-      - Approval status and next stage
-  - Handoff: Await user approval of the plan before `/do`.
-
-- `/do` (Execution)
-  - Purpose: Implement approved plan steps with minimal, focused changes and file operations.
-  - Actions:
-    - Use `apply_patch` for file edits; group related changes and keep diffs scoped to approved steps.
-    - Provide concise progress updates and a final summary of changes.
-    - Validate appropriately: run `cmake --build` (or `scripts/build.ps1`), `ctest`, relevant `dotnet test` projects, and `scripts/run_verification_tests.ps1` where it makes sense.
-    - If material changes to the plan are needed, pause and return to `/plan` (or `/spec`) for approval.
-  - Output: Implemented changes, validation results, and a concise change summary linked to the plan checklist.
-
-### Plans Directory
-
-- Location: `plans/` at the repository root.
-- Filename: `YYYY-MM-DD-short-title.md` (kebab-case title; consistent dating).
-- Style: Plan docs are the canonical source of truth for the implementation approach; avoid embedding change logs or "correction/更正" notes. Update the plan in place as decisions evolve.
-- Contents:
-  - Title and summary
-  - Scope and linked specs (paths under `specs/`)
-  - Assumptions / Out of scope
-  - Step-by-step plan (short, verifiable)
-  - Validation strategy (tests/lint/build)
-  - Approval status and next stage
-- Process:
-  - During `/plan`, create or update the relevant file in `plans/` and share a short summary in the conversation. Await approval before `/do`.
+---
+若未来新增全局通用规则，请在更新本基线后再同步到其他仓库；项目私有信息仅放入“项目特性”区块。
